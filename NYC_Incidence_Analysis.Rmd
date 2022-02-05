@@ -1,0 +1,247 @@
+---
+title: "NYC Shooting Incident Report Analysis"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r setup, warning=FALSE}
+```
+
+*In this report, we'll being analyzing the NYC Shooting Incidence data. We'll begin with tidying up and transforming our data, then visualizing it and doing some analysis, and finally we'll discuss potential biases from the analysis and summarize our findings. The question we will address in this analysis is: what can we infer about the relationship between the number of incidents and the time and place?*
+
+## Project 1: Use R Markdown to create document
+
+_Load the packages needed for the analysis_
+
+```{r, results='hide'}
+##We will be using the tidyverse package for this analysis
+
+library(tidyverse)
+library(lubridate)
+
+```
+
+## Project 2: Tidy and Transform your data
+
+_We will start by reading the the public data and substituting any blank or missing values in the datset with na's._
+
+_For the values with NA, we need to consider the unknown data and not omit it as because we don't know whether the data points are important later in the analysis_
+
+
+```{r}
+dat<-read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD",
+              na.strings = c(""," ","na","NA"))
+head(dat)
+summary(dat)
+
+```
+
+_For the purooses of this analysis, all values of "NA" will be labeled as "UNKNOWN" and will later be omitted. This will help us focus on data that are known and make it simplier to draw conclusions_
+
+```{r, results='hide'}
+dat[is.na(dat)]<- "UNKNOWN"
+```
+
+_Create new dataframe and select only important columns for analysis. Convert them to appropriate data types_
+
+```{r, results='hide'}
+##colnames(dat)
+dat2<-dat %>%
+  select(-c(INCIDENT_KEY,OCCUR_DATE,PRECINCT,
+            JURISDICTION_CODE,STATISTICAL_MURDER_FLAG,
+            X_COORD_CD,Y_COORD_CD,
+            Latitude,Longitude,Lon_Lat)) %>%
+  mutate(time=as.factor(hms(OCCUR_TIME)@hour))
+
+colnamesvec<- colnames(dat2)
+colnamesvec
+
+dat3<- lapply(select_if(dat2[colnamesvec],is.character), factor)
+datmer<- merge(dat3,dat2)
+
+##check data structure
+str(datmer)
+```
+
+_Let's create a long data file so that we can view all counts of each group. Create a function to summarize each column and then recombine to form a long data format. Then view the long data frame_
+
+```{r, results='hide'}
+funsum<-function(dat,newcolval){
+  df<-as.data.frame(summary(dat))
+new_df<-cbind(variable=row.names(df),df)
+new_df<-rename(new_df, count="summary(dat)")
+row.names(new_df)<-NULL
+new_df<-cbind(group=newcolval,new_df)
+return(new_df)}
+
+datlong<-rbind(funsum(datmer$BORO,"boro"),
+funsum(datmer$time,"time"),
+funsum(datmer$LOCATION_DESC,"location"),
+funsum(datmer$PERP_AGE_GROUP,"perp age"),
+funsum(datmer$PERP_SEX,"perp sex"),
+funsum(datmer$PERP_RACE,"perp race"),
+funsum(datmer$VIC_AGE_GROUP,"vic age"),
+funsum(datmer$VIC_SEX,"vic sex"),
+funsum(datmer$VIC_RACE,"vic race"))
+datlong$group<-as.factor(datlong$group)
+datlong$variable<-as.factor(datlong$variable)
+
+tail(datlong,20)
+
+```
+
+_Now filter out the "UNKNOWN" values from the rows and check to see that there are no more rows with missing values_
+
+```{r}
+datlong<-datlong %>% filter(variable!="UNKNOWN") %>% filter(variable!="U")
+tail(datlong,20)
+```
+
+## Project 3: Add Visualizations and Analysis
+
+_Now let's visualize the dataset to get a better understanding of what's in the data_
+
+```{r,fig.width=10,fig.height=11}
+
+ggplot(data = datlong, aes(x=as.factor(variable),y=count, fill=group))+
+  ##geom_bar(stat="identity")+
+  geom_bar(stat="identity")+
+  xlab("Borough of NYC")+
+  coord_flip()+
+  facet_wrap(~group, scales = "free_y")+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))
+
+```
+
+_We see some interesting results. For this analysis we will focus on the location (Bororugh) in which the incidents occured and the time_**
+
+_Where do we see the most incidents?_
+
+```{r, fig.width=10,fig.height=11}
+
+##Where do we see the most incidents?
+ggplot(data = datmer %>% filter(LOCATION_DESC!="UNKNOWN") %>% filter(LOCATION_DESC!="U"), 
+       aes(x=factor(BORO), fill= BORO))+
+  geom_bar()+
+  facet_wrap(~LOCATION_DESC)+
+  xlab("Borough of NYC")+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))
+
+```
+
+
+_It looks like multi-dwelling groups have the most reported incidents_
+
+_Additionally, the Borough Brookyln also has a higher count of reported incidents. Let's include the population data to see if the incident rate as a function of population is different_
+
+```{r, fig.width=10,fig.height=11}
+
+loc_dat<-as.data.frame(summary(datmer$BORO))
+new_dat<-cbind(boro=row.names(loc_dat),
+               total=loc_dat[1])
+new_dat<-rename(new_dat, count="summary(datmer$BORO)")
+row.names(new_dat)<-NULL
+new_dat<-data.frame(new_dat,
+                          population= c(2717758,
+                                        4970026,
+                                        3123068,
+                                        4460101,
+                                        912458)) %>% mutate(inc_freq_pop= count/population)
+
+ggplot(data = new_dat, aes(x=factor(boro), y=inc_freq_pop, fill= inc_freq_pop))+
+  geom_bar(stat="identity")+
+  ##facet_wrap(~LOCATION_DESC)+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))+
+  scale_y_continuous(labels = scales::percent_format())+
+  labs(x="Borough", y="incidence by percentage in poulation (%)")
+
+```
+
+**_Interesting. Now let's check when and where these incidents occured_**
+
+```{r, fig.width=10,fig.height=11}
+
+time_dat<-rename(count(datmer,time,BORO),count=n)
+
+##plot number of incidence reported tp the count
+ggplot(data = time_dat, aes(x=as.numeric(time),y=count, color=count))+
+  geom_point()+
+  geom_line()+
+  facet_wrap(~BORO)+
+  xlab("Hour of the day in 24 hour format")+
+  theme(legend.position="bottom",
+        axis.text.x=element_text(angle = 90))+
+  geom_label(aes(label=count))
+
+```
+
+
+_We can see that the highest reported shooting incidents are around mignight (values= 0,1,23,24) and they occur most frequently in Bronx and Brookyn. Could it be that these areas are very dangerous around those hours?_
+
+_Now let's do some analysis and predict the incidents by Borough and Time_
+
+
+```{r}
+mod<-lm(count~BORO, data=time_dat)
+summary(mod)$adj.r.squared
+mod<-lm(count~time, data=time_dat)
+summary(mod)$adj.r.squared
+mod<-lm(count~BORO+time, data=time_dat)
+summary(mod)$adj.r.squared
+
+summary(mod)
+
+```
+
+_Borough and Time are very good predictors of count and fit the model better together than as indivudal predictors as can be seen from the adjusted r-squared values. The r-squared value for for the multiple regression model is 0.7107 which is very good_**
+
+_Let's do some more analysis on the count values with repect to time and the predicted counts.How does the predicted values compare with the reported values? What's the correlation statistic?_
+
+```{r}
+##check for statical differences between time
+time_dat2<-time_dat%>% mutate(pred_vals=predict(mod))
+##View(head(time_dat2))
+correlationtest<-cor.test(time_dat2$count,time_dat2$pred_vals)
+correlationtest
+```
+
+_Very nice. The p-value is less than 2.2e-16 and The correlation is 0.88, indicating significantly postive correlation_
+
+_Now let's see how the predicted values compare with the reported values in a chart_
+
+```{r, fig.width=10,fig.height=11}
+
+
+##Now lets visualize
+time_dat2 %>% ggplot()+
+  geom_point(aes(x=time,
+                 y=count,
+             color="count"))+
+  geom_point(aes(x=time,
+                 y=pred_vals,
+             color="predicted count"))+
+  ##coord_flip()+
+  theme_bw()+
+  facet_wrap(~BORO)+
+  ylab("number of reported incidents")+
+  xlab("Hour of the day in 24 hour format")+
+  theme(legend.position="bottom")
+        ##axis.text.x=element_text(angle = 90))
+
+```
+
+_A good fit!_
+
+## Project Step 4: Add Bias Identification
+
+_Potential biases from the dataset includes how the data may be collected, the quality of the data collection and the frequency in which the data is collected in each part of NYC. To mitigate potential biases for myself, I explored the data of all relevant variables in the dataset. To avoid ethical issues that could arise with the reporting of the data, I avoided exploring indepthly race, age, or sex. Doing the analyis based on time and location could be useful for the areas in NYC, because they can use the information and take action to try and reduce incidents without targeting specific groups of people. From the analyis, we see that most incidents occured around midnight. It may not be feasible for the Boroughs to enforce a curfew after 11pm due to the massive populations in each area but people could be made aware of of the higher than usual incident rate at night so that people can avoid being there. We also observe that the incidents occur at multi-dwelling units usch as apartments buildings. As a resident, it would be hard to avoid being near the incidents at the time but it is good to know when to stay indoors to avoid becoming a victim. We observe in our model that both Borough and time predict the incidents counts very well. The adjusted r-squared value is highest at above 0.7 when both factors are incorporated in the model. Nonetheless we have to be aware that these relationships to not imply causation and there may be other important factors that are not captured in the dataset._
+
+
+```{r}
+sessionInfo()
+```
